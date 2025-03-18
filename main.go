@@ -2,75 +2,71 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/manifoldco/promptui"
 )
 
-func containsIgnoreCase(str, substr string) bool {
-	return len(str) >= len(substr) && (str[:len(substr)] == substr || containsIgnoreCase(str[1:], substr))
-}
-
 func main() {
-	cfg, _ := config.LoadDefaultConfig(context.TODO(), config.WithSharedConfigProfile("test"))
+
+	profiles, err := GetAllAwsProfiles()
+
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	profile := flag.String("profile", "", "AWS Profile")
+
+	flag.Parse()
+
+	if *profile == "" {
+		fmt.Printf("Please provide a valid AWS profile name with --profile flag. Available profiles: %s", strings.Join(profiles, ", "))
+		return
+	}
+
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	var found bool = false
+
+	for _, p := range profiles {
+		if p == *profile {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		fmt.Printf("Invalid AWS profile. Available profiles: %s", strings.Join(profiles, ", "))
+	}
+
+	cfg, _ := config.LoadDefaultConfig(context.TODO(), config.WithSharedConfigProfile(*profile))
 	ec2Client := ec2.NewFromConfig(cfg)
 
-	var allInstancesEC2 []types.Instance
-	var nameToId map[string]string = make(map[string]string)
+	instanceNameToId := GetRunningAwsInstances(ec2Client)
+	names := make([]string, 0, len(instanceNameToId))
 
-	var INSTANCE_STATE_KEY string = "instance-state-name"
-
-	input := ec2.DescribeInstancesInput{
-		Filters: []types.Filter{
-			{
-				Name:   &INSTANCE_STATE_KEY,
-				Values: []string{"running"},
-			},
-		},
-	}
-
-	paginator := ec2.NewDescribeInstancesPaginator(ec2Client, &input)
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(context.TODO())
-		if err != nil {
-			panic(err)
-		}
-
-		// Append instances from each page
-		for _, r := range page.Reservations {
-			allInstancesEC2 = append(allInstancesEC2, r.Instances...)
-		}
-	}
-
-	for _, instance := range allInstancesEC2 {
-		if instance.Tags != nil {
-			for _, tag := range instance.Tags {
-				if *tag.Key == "Name" {
-					// fmt.Printf("Instance ID: %s, Name: %s\n", *instance.InstanceId, *tag.Value)
-					nameToId[*tag.Value] = *instance.InstanceId
-				}
-			}
-		}
-	}
-
-	keys := make([]string, 0, len(nameToId))
-	for k := range nameToId {
-		keys = append(keys, k)
+	for k := range instanceNameToId {
+		names = append(names, k)
 	}
 
 	instancePrompt := promptui.Select{
 		Label: "Name",
-		Items: keys,
+		Items: names,
 		Searcher: func(input string, index int) bool {
 			// Match the input to the items by checking if the item contains the input string (case-insensitive)
-			item := keys[index]
-			return (len(input) == 0) || (containsIgnoreCase(item, input))
+			item := names[index]
+			return (len(input) == 0) || (ContainsIgnoreCase(item, input))
 		},
 	}
 
@@ -80,7 +76,7 @@ func main() {
 		panic(err)
 	}
 
-	instanceId := nameToId[res]
+	instanceId := instanceNameToId[res]
 
 	operationPrompt := promptui.Select{
 		Label: "Operation",
@@ -115,7 +111,7 @@ func main() {
 			panic(err)
 		}
 
-		_cmd := fmt.Sprintf(`aws ssm start-session --target %s --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["%s"], "localPortNumber":["%s"]}'  --profile test`, instanceId, sourcePort, destPort)
+		_cmd := fmt.Sprintf(`aws ssm start-session --target %s --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["%s"], "localPortNumber":["%s"]}'  --profile %s`, instanceId, sourcePort, destPort, *profile)
 		println(_cmd)
 
 		cmd := exec.Command("bash", "-c", _cmd)
@@ -137,7 +133,7 @@ func main() {
 
 	} else if op == "Login" {
 
-		_cmd := fmt.Sprintf(`aws ssm start-session --target %s --profile test`, instanceId)
+		_cmd := fmt.Sprintf(`aws ssm start-session --target %s --profile prod`, instanceId)
 		println(_cmd)
 
 		fmt.Printf("\033]0;%s\007", res)
@@ -145,27 +141,6 @@ func main() {
 		err := syscall.Exec("/bin/bash", []string{"bash", "-c", _cmd}, os.Environ())
 
 		panic(err)
-
-		// cmd := exec.Command("bash", "-c", _cmd)
-
-		// cmd.Stdout = os.Stdout
-		// cmd.Stderr = os.Stderr
-		// cmd.Stdin = os.Stdin
-
-		// cmd.Env = append(os.Environ(), "TERM=xterm")
-		// cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-		// err = cmd.Run()
-
-		// if err != nil {
-		// 	panic(err)
-		// }
-
-		// err = cmd.Wait()
-
-		// if err != nil {
-		// 	panic(err)
-		// }
 
 	} else {
 		println("Invalid operation!!!")
