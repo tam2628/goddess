@@ -28,12 +28,7 @@ func main() {
 	flag.Parse()
 
 	if *profile == "" {
-		fmt.Printf("Please provide a valid AWS profile name with --profile flag. Available profiles: %s", strings.Join(profiles, ", "))
-		return
-	}
-
-	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Please provide a valid AWS profile name with --profile flag. Available profiles: ", strings.Join(profiles, ", "))
 		os.Exit(1)
 	}
 
@@ -47,7 +42,8 @@ func main() {
 	}
 
 	if !found {
-		fmt.Printf("Invalid AWS profile. Available profiles: %s", strings.Join(profiles, ", "))
+		fmt.Println("Invalid AWS profile. Available profiles: ", strings.Join(profiles, ", "))
+		os.Exit(1)
 	}
 
 	cfg, _ := config.LoadDefaultConfig(context.TODO(), config.WithSharedConfigProfile(*profile))
@@ -133,7 +129,7 @@ func main() {
 
 	} else if op == "Login" {
 
-		_cmd := fmt.Sprintf(`aws ssm start-session --target %s --profile prod`, instanceId)
+		_cmd := fmt.Sprintf(`aws ssm start-session --target %s --profile %s`, instanceId, *profile)
 		println(_cmd)
 
 		fmt.Printf("\033]0;%s\007", res)
